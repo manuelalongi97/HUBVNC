@@ -51,11 +51,6 @@ else:
 
 APPDATA_DIR = os.path.join(os.environ.get("APPDATA", APP_DIR), "HubVNC")
 os.makedirs(APPDATA_DIR, exist_ok=True)
-
-# --- NUOVO: cartella persistente per binari/icone (evita lock temp PyInstaller) ---
-PERSIST_BIN_DIR = os.path.join(APPDATA_DIR, "bin")
-os.makedirs(PERSIST_BIN_DIR, exist_ok=True)
-
 SAVE_FILE = os.path.join(APPDATA_DIR, "connections.json")
 SETTINGS_FILE = os.path.join(APPDATA_DIR, "settings.json")
 LOG_FILE  = os.path.join(APPDATA_DIR, "hubvnc.log")
@@ -64,26 +59,6 @@ VNC_VIEWER  = os.path.join(RESOURCE_DIR, "tvnviewer.exe")
 VNC_SERVER  = os.path.join(RESOURCE_DIR, "tvnserver.exe")
 CONN_ICON_PATH = os.path.join(RESOURCE_DIR, "conn_ico.png")
 OLD_LOCAL_SAVE = os.path.join(APP_DIR, "connections.json")
-
-# --- NUOVO: se "frozen", copia risorse in PERSIST_BIN_DIR e reindirizza ---
-def _copy_if_newer(src, dst):
-    try:
-        if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst) or os.path.getsize(src) != os.path.getsize(dst):
-            shutil.copy2(src, dst)
-    except Exception:
-        pass
-
-if getattr(sys, "frozen", False):
-    to_copy = []
-    if os.path.exists(VNC_VIEWER): to_copy.append(("tvnviewer.exe", VNC_VIEWER))
-    if os.path.exists(VNC_SERVER): to_copy.append(("tvnserver.exe", VNC_SERVER))
-    if os.path.exists(CONN_ICON_PATH): to_copy.append(("conn_ico.png", CONN_ICON_PATH))
-    for name, src in to_copy:
-        _copy_if_newer(src, os.path.join(PERSIST_BIN_DIR, name))
-    # Reindirizza a cartella persistente
-    VNC_VIEWER = os.path.join(PERSIST_BIN_DIR, "tvnviewer.exe")
-    VNC_SERVER = os.path.join(PERSIST_BIN_DIR, "tvnserver.exe")
-    CONN_ICON_PATH = os.path.join(PERSIST_BIN_DIR, "conn_ico.png")
 
 # ───────── logging ─────────
 def log(msg: str):
@@ -191,9 +166,6 @@ def run_silent(args, **kwargs):
 def popen_silent(args, **kwargs):
     flags = _silent_flags_kwargs()
     flags.update(kwargs)
-    # --- NUOVO: chiudi gli handle e usa dir persistente come working dir ---
-    flags.setdefault("close_fds", True)
-    flags.setdefault("cwd", PERSIST_BIN_DIR)
     return subprocess.Popen(args, **flags)
 
 # ───────── Sezioni / ordine persistente ─────────
@@ -638,7 +610,7 @@ def check_for_updates():
                             webbrowser.open(REPO_RELEASES_PAGE)
                 root.after(0, _ask_open)
             else:
-                # Script Python: scarica il nuovo script dal branch
+                # Script Python: scarica il nuovo HubVNC.py dal branch
                 def _do_script_update():
                     try:
                         data = _http_get(RAW_SCRIPT_URL, accept="text/plain")
@@ -1239,7 +1211,7 @@ def _launch_rdp_with_rdpfile(host: str, port: int | str, username: str | None):
         return
 
     try:
-        popen_silent(["mstsc", rdp_path], cwd=APPDATA_DIR)  # usa appdata come working dir
+        subprocess.Popen(["mstsc", rdp_path])
         log(f"Opened RDP via .rdp file: {host}:{port} (user={username or 'N/D'})")
     except Exception as e:
         messagebox.showerror("Errore RDP", f"Impossibile avviare mstsc:\n{e}")
@@ -1253,7 +1225,7 @@ def connect_connection_dict(cdict):
                 args = [VNC_VIEWER]
                 if cdict.get("password"): args.append(f"-password={cdict.get('password')}")
                 args.append(f"{host}::{port}")
-                popen_silent(args)  # usa cwd=PERSIST_BIN_DIR + close_fds
+                subprocess.Popen(args)
                 log(f"Opened VNC to {host}:{port} (with_password={bool(cdict.get('password'))})")
             else:
                 messagebox.showerror("Errore","Viewer VNC non trovato!")
@@ -1261,8 +1233,7 @@ def connect_connection_dict(cdict):
             username = (cdict.get("username", "") or "").strip()
             _launch_rdp_with_rdpfile(host, port, username)  # soluzione robusta
         elif proto=="SSH":
-            popen_silent(["putty", host, "-P", str(port)])
-            log(f"Opened SSH to {host}:{port}")
+            subprocess.Popen(["putty", host, "-P", str(port)]); log(f"Opened SSH to {host}:{port}")
         else:
             messagebox.showerror("Errore", f"Protocollo {proto} non supportato.")
     except Exception as e:
@@ -1389,8 +1360,7 @@ def start_vnc_server():
         if not os.path.exists(VNC_SERVER):
             messagebox.showerror("Errore", "tvnserver.exe non trovato nella cartella dell'app."); return
         try:
-            popen_silent([VNC_SERVER, "-run"])  # cwd già impostata a bin persistente
-            log("Started TightVNC Server (manual)")
+            popen_silent([VNC_SERVER, "-run"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); log("Started TightVNC Server (manual)")
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile avviare TightVNC Server:\n{e}"); return
 
@@ -1602,7 +1572,7 @@ def _autostart_vnc_if_enabled():
     if not os.path.exists(VNC_SERVER):
         return
     try:
-        popen_silent([VNC_SERVER, "-run"])
+        popen_silent([VNC_SERVER, "-run"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         port = _reg_get_hkcu_tvn_dword("RfbPort", None)
         if port:
             open_firewall_port(int(port))
